@@ -1,0 +1,46 @@
+version: "3.9"
+
+# Compose para desenvolvimento local.
+# No Coolify, cada serviço é deployado separadamente via GitHub.
+
+services:
+  # ── Evolution API (WhatsApp) ─────────────────────────────────────────────
+  evolution-api:
+    image: atendai/evolution-api:v2.2.3
+    container_name: evolution-api
+    restart: unless-stopped
+    ports:
+      - "8081:8080"    # acesse em http://localhost:8081
+    environment:
+      SERVER_URL: http://evolution-api:8080
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY}
+      DATABASE_ENABLED: "false"
+      CACHE_REDIS_ENABLED: "false"
+    volumes:
+      - evolution_data:/evolution/instances
+
+  # ── Bot Python ───────────────────────────────────────────────────────────
+  caquinho-bot:
+    build: .
+    container_name: caquinho-bot
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      NIGHTSCOUT_URL: ${NIGHTSCOUT_URL}
+      NIGHTSCOUT_API_SECRET: ${NIGHTSCOUT_API_SECRET}
+      EVOLUTION_API_URL: http://evolution-api:8080
+      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY}
+      EVOLUTION_INSTANCE: ${EVOLUTION_INSTANCE:-caquinho-bot}
+      GLUCOSE_LOW: ${GLUCOSE_LOW:-70}
+      GLUCOSE_HIGH: ${GLUCOSE_HIGH:-180}
+      POLL_INTERVAL: ${POLL_INTERVAL:-300}
+      ALERT_COOLDOWN: ${ALERT_COOLDOWN:-1800}
+    volumes:
+      - bot_data:/data
+    depends_on:
+      - evolution-api
+
+volumes:
+  evolution_data:
+  bot_data:
