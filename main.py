@@ -1,10 +1,11 @@
 """
-Bot de alertas de glicose via WhatsApp.
+Bot de alertas de glicose via WhatsApp e Telegram.
 
 Funcionalidades:
   - Polling do Nightscout a cada POLL_INTERVAL segundos
   - Alertas automáticos de hipoglicemia (< GLUCOSE_LOW mg/dL) e hiperglicemia (> GLUCOSE_HIGH mg/dL)
   - Cooldown por tipo de alerta para não spam
+  - Alertas enviados via WhatsApp (Evolution API) E Telegram (opcional)
   - Webhook para receber mensagens: responde a "glicose caquinho" com a leitura atual
   - Comandos admin para adicionar/remover contatos via WhatsApp
 """
@@ -19,6 +20,7 @@ import config
 import contacts
 import evolution
 import nightscout
+import telegram_bot
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -72,7 +74,7 @@ def _monitor_loop():
 
 
 def _send_alert(alert_type: str, entry: dict):
-    """Monta e envia a mensagem de alerta para todos os contatos."""
+    """Monta e envia a mensagem de alerta via WhatsApp e Telegram."""
     sgv = entry["sgv"]
     reading = nightscout.format_reading(entry)
 
@@ -88,14 +90,21 @@ def _send_alert(alert_type: str, entry: dict):
         )
 
     message = header + reading
+
+    # ── WhatsApp ──────────────────────────────────────────────────────────────
     all_contacts = contacts.load()
+    if all_contacts:
+        logger.info("Enviando alerta '%s' via WhatsApp para %d contato(s)", alert_type, len(all_contacts))
+        evolution.send_to_all(all_contacts, message)
+    else:
+        logger.warning("Nenhum contato WhatsApp cadastrado para receber alertas.")
 
-    if not all_contacts:
-        logger.warning("Nenhum contato cadastrado para receber alertas.")
-        return
-
-    logger.info("Enviando alerta '%s' para %d contato(s)", alert_type, len(all_contacts))
-    evolution.send_to_all(all_contacts, message)
+    # ── Telegram ──────────────────────────────────────────────────────────────
+    if config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_IDS:
+        logger.info("Enviando alerta '%s' via Telegram", alert_type)
+        telegram_bot.send_to_all(message)
+    else:
+        logger.debug("Telegram não configurado — alerta não enviado por Telegram.")
 
 
 # ─── Webhook Flask ────────────────────────────────────────────────────────────
@@ -129,6 +138,47 @@ def webhook():
     _handle_message(sender_number, text)
 
     return jsonify({"ok": True})
+
+
+@app.route("/telegram/webhook", methods=["POST"])
+def telegram_webhook():
+    """Recebe updates do Telegram (mensagens enviadas ao bot)."""
+    data = request.get_json(silent=True) or {}
+    chat_id, text, username = telegram_bot.parse_incoming(data)
+
+    if not chat_id or not text:
+        return jsonify({"ok": True})
+
+    logger.info("Telegram: mensagem de %s (chat_id=%s): %s", username, chat_id, text)
+    _handle_telegram_message(chat_id, text)
+    return jsonify({"ok": True})
+
+
+def _handle_telegram_message(chat_id: int, text: str):
+    """Processa comandos recebidos via Telegram."""
+    lower = text.lower().strip()
+
+    # ── Consulta pública ──────────────────────────────────────────────────────
+    if lower in ("glicose caquinho", "/glicose", "/start"):
+        entry = nightscout.get_latest_entry()
+        if entry:
+            reply = "🩸 *Última medição de Caquinho:*\n\n" + nightscout.format_reading(entry)
+        else:
+            reply = "❌ Não foi possível obter a leitura do Nightscout. Tente mais tarde."
+        telegram_bot.send_message(chat_id, reply)
+        return
+
+    # ── Ajuda ─────────────────────────────────────────────────────────────────
+    if lower in ("ajuda", "/ajuda", "/help", "?"):
+        msg = (
+            "🤖 *Bot Glicose Caquinho*\n\n"
+            "*Comandos disponíveis:*\n"
+            "• `Glicose Caquinho` ou `/glicose` — última medição\n"
+            "• `/ajuda` — esta mensagem\n\n"
+            "_Alertas automáticos são enviados quando a glicose sai dos limites._"
+        )
+        telegram_bot.send_message(chat_id, msg)
+        return
 
 
 @app.route("/health", methods=["GET"])
@@ -236,6 +286,19 @@ def start_monitor():
     # Configura o webhook para apontar para este container
     webhook_url = f"http://caquinho-bot:{config.WEBHOOK_PORT}/webhook"
     evolution.set_webhook(webhook_url)
+
+    # Telegram
+    if config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_IDS:
+        logger.info("Telegram habilitado — chat_ids: %s", config.TELEGRAM_CHAT_IDS)
+        if config.TELEGRAM_WEBHOOK_URL:
+            telegram_bot.set_webhook(config.TELEGRAM_WEBHOOK_URL)
+        else:
+            logger.warning(
+                "TELEGRAM_WEBHOOK_URL não definido — comandos Telegram não funcionarão. "
+                "Defina como: https://<seu-dominio>/telegram/webhook"
+            )
+    else:
+        logger.info("Telegram não configurado (opcional) — alertas somente via WhatsApp.")
 
     monitor_thread = threading.Thread(target=_monitor_loop, daemon=True)
     monitor_thread.start()
