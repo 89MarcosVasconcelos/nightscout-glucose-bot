@@ -2,14 +2,16 @@
 Bot de alertas de glicose via WhatsApp e Telegram.
 
 Funcionalidades:
-  - Polling do Nightscout a cada POLL_INTERVAL segundos
-  - Alertas automáticos de hipoglicemia (< GLUCOSE_LOW mg/dL) e hiperglicemia (> GLUCOSE_HIGH mg/dL)
-  - Cooldown por tipo de alerta para não spam
-  - Alertas enviados via WhatsApp (Evolution API) E Telegram (opcional)
-  - Webhook para receber mensagens: responde a "glicose caquinho" com a leitura atual
-  - Comandos admin para adicionar/remover contatos via WhatsApp
+- Polling do Nightscout a cada POLL_INTERVAL segundos
+- Alertas automáticos de hipoglicemia (< GLUCOSE_LOW mg/dL) e hiperglicemia (> GLUCOSE_HIGH mg/dL)
+- Cooldown por tipo de alerta para não spam
+- Alertas enviados via WhatsApp (Evolution API) E Telegram (opcional)
+- Webhook para receber mensagens: responde a "glicose caquinho" com a leitura atual
+- Comandos admin para adicionar/remover contatos via WhatsApp
+- Endpoint REST para a Alexa Skill ("Glicose agora") consultar a leitura atual
 """
 import logging
+import os
 import threading
 import time
 from datetime import datetime, timezone
@@ -33,10 +35,12 @@ logger = logging.getLogger(__name__)
 # ─── Flask app ────────────────────────────────────────────────────────────────
 app = Flask(__name__)
 
+# ─── Chave de acesso para a Alexa Skill (separada do segredo do Nightscout) ──
+ALEXA_API_KEY = os.environ.get("ALEXA_API_KEY", "")
+
 # ─── Estado de alertas (cooldown) ─────────────────────────────────────────────
 _last_alert: dict[str, float] = {}
 _alert_lock = threading.Lock()
-
 
 def _can_alert(alert_type: str) -> bool:
     """Retorna True se o cooldown para esse tipo de alerta já passou."""
@@ -46,7 +50,6 @@ def _can_alert(alert_type: str) -> bool:
             _last_alert[alert_type] = time.time()
             return True
         return False
-
 
 # ─── Loop de monitoramento ────────────────────────────────────────────────────
 def _monitor_loop():
@@ -71,7 +74,6 @@ def _monitor_loop():
             logger.exception("Erro inesperado no monitor: %s", e)
 
         time.sleep(config.POLL_INTERVAL)
-
 
 def _send_alert(alert_type: str, entry: dict):
     """Monta e envia a mensagem de alerta via WhatsApp e Telegram."""
@@ -106,7 +108,6 @@ def _send_alert(alert_type: str, entry: dict):
     else:
         logger.debug("Telegram não configurado — alerta não enviado por Telegram.")
 
-
 # ─── Webhook Flask ────────────────────────────────────────────────────────────
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -139,7 +140,6 @@ def webhook():
 
     return jsonify({"ok": True})
 
-
 @app.route("/telegram/webhook", methods=["POST"])
 def telegram_webhook():
     """Recebe updates do Telegram (mensagens enviadas ao bot)."""
@@ -152,7 +152,6 @@ def telegram_webhook():
     logger.info("Telegram: mensagem de %s (chat_id=%s): %s", username, chat_id, text)
     _handle_telegram_message(chat_id, text)
     return jsonify({"ok": True})
-
 
 def _handle_telegram_message(chat_id: int, text: str):
     """Processa comandos recebidos via Telegram."""
@@ -180,12 +179,39 @@ def _handle_telegram_message(chat_id: int, text: str):
         telegram_bot.send_message(chat_id, msg)
         return
 
-
 @app.route("/health", methods=["GET"])
 def health():
     """Health check para o Coolify."""
     return jsonify({"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()})
 
+@app.route("/api/alexa/glucose", methods=["GET"])
+def alexa_glucose():
+    """
+    Endpoint consumido pela Alexa Skill "Glicose agora".
+    Protegido por uma chave própria (header X-Api-Key), independente
+    do API_SECRET do Nightscout, que nunca é exposto aqui.
+    """
+    if ALEXA_API_KEY:
+        provided = request.headers.get("X-Api-Key", "")
+        if provided != ALEXA_API_KEY:
+            return jsonify({"error": "unauthorized"}), 401
+
+    entry = nightscout.get_latest_entry()
+    if not entry:
+        return jsonify({"error": "unavailable"}), 503
+
+    now = datetime.now(timezone.utc)
+    minutes_ago = max(0, int((now - entry["date"]).total_seconds() // 60))
+
+    return jsonify(
+        {
+            "sgv": entry["sgv"],
+            "direction": entry["direction"],
+            "direction_text": entry["direction_emoji"],
+            "minutes_ago": minutes_ago,
+            "datetime_utc": entry["date"].isoformat(),
+        }
+    )
 
 def _handle_message(sender: str, text: str):
     """Processa comandos recebidos via WhatsApp."""
@@ -243,7 +269,7 @@ def _handle_message(sender: str, text: str):
         if not all_contacts:
             msg = "📋 Nenhum contato cadastrado."
         else:
-            lines = [f"  • {c['name']} — {c['number']}" for c in all_contacts]
+            lines = [f" • {c['name']} — {c['number']}" for c in all_contacts]
             msg = "📋 *Contatos cadastrados:*\n" + "\n".join(lines)
         evolution.send_text(sender, msg)
         return
@@ -260,7 +286,6 @@ def _handle_message(sender: str, text: str):
             "• `lista` — lista todos os contatos\n"
         )
         evolution.send_text(sender, msg)
-
 
 # ─── Inicialização (chamada pelo entrypoint) ──────────────────────────────────
 def start_monitor():
@@ -300,10 +325,14 @@ def start_monitor():
     else:
         logger.info("Telegram não configurado (opcional) — alertas somente via WhatsApp.")
 
+    if ALEXA_API_KEY:
+        logger.info("Endpoint da Alexa habilitado em /api/alexa/glucose")
+    else:
+        logger.info("ALEXA_API_KEY não definida — endpoint /api/alexa/glucose ficará sem autenticação.")
+
     monitor_thread = threading.Thread(target=_monitor_loop, daemon=True)
     monitor_thread.start()
     logger.info("Thread de monitoramento iniciada.")
-
 
 if __name__ == "__main__":
     start_monitor()
