@@ -144,7 +144,7 @@ def webhook():
 def telegram_webhook():
     """Recebe updates do Telegram (mensagens enviadas ao bot)."""
     data = request.get_json(silent=True) or {}
-    chat_id, text, username = telegram_bot.parse_incoming(data)h
+    chat_id, text, username = telegram_bot.parse_incoming(data)
 
     if not chat_id or not text:
         return jsonify({"ok": True})
