@@ -11,7 +11,7 @@ Funcionalidades:
 - Endpoint REST para a Alexa Skill ("Glicose agora") consultar a leitura atual
 """
 import logging
-import os
+import osh
 import threading
 import time
 from datetime import datetime, timezone
@@ -144,7 +144,7 @@ def webhook():
 def telegram_webhook():
     """Recebe updates do Telegram (mensagens enviadas ao bot)."""
     data = request.get_json(silent=True) or {}
-    chat_id, text, username = telegram_bot.parse_incoming(data)
+    chat_id, text, username = telegram_bot.parse_incoming(data)h
 
     if not chat_id or not text:
         return jsonify({"ok": True})
@@ -191,9 +191,9 @@ def alexa_glucose():
     Protegido por uma chave própria (header X-Api-Key), independente
     do API_SECRET do Nightscout, que nunca é exposto aqui.
     """
-    if ALEXA_API_KEY:
+    if config.ALEXA_API_KEY:
         provided = request.headers.get("X-Api-Key", "")
-        if provided != ALEXA_API_KEY:
+        if provided != config.ALEXA_API_KEY:
             return jsonify({"error": "unauthorized"}), 401
 
     entry = nightscout.get_latest_entry()
@@ -207,7 +207,7 @@ def alexa_glucose():
         {
             "sgv": entry["sgv"],
             "direction": entry["direction"],
-            "direction_text": entry["direction_emoji"],
+            "direction_text": entry["direction_emoji"].split(" ", 1)[-1],
             "minutes_ago": minutes_ago,
             "datetime_utc": entry["date"].isoformat(),
         }
@@ -325,7 +325,7 @@ def start_monitor():
     else:
         logger.info("Telegram não configurado (opcional) — alertas somente via WhatsApp.")
 
-    if ALEXA_API_KEY:
+    if config.ALEXA_API_KEY:
         logger.info("Endpoint da Alexa habilitado em /api/alexa/glucose")
     else:
         logger.info("ALEXA_API_KEY não definida — endpoint /api/alexa/glucose ficará sem autenticação.")
