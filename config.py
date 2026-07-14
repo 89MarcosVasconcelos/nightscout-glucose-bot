@@ -32,6 +32,9 @@ ALERT_COOLDOWN = int(os.getenv("ALERT_COOLDOWN", "1800")) # 30 minutos
 WEBHOOK_PORT = int(os.getenv("WEBHOOK_PORT", "8080"))
 CONTACTS_FILE = os.getenv("CONTACTS_FILE", "/data/contacts.json")
 
+# ── Alexa Skill ─────────────────────────────────────────────────────────────
+ALEXA_API_KEY = os.getenv("ALEXA_API_KEY", "")
+
 
 def validate():
     missing = []
