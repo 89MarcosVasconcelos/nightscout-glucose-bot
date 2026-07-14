@@ -11,7 +11,7 @@ Funcionalidades:
 - Endpoint REST para a Alexa Skill ("Glicose agora") consultar a leitura atual
 """
 import logging
-import osh
+import os
 import threading
 import time
 from datetime import datetime, timezone
